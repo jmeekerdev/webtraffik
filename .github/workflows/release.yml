@@ -1,0 +1,133 @@
+name: Release
+
+# Push a tag like v1.2.3 to publish a GitHub release with source archives and
+# compiled binaries for every supported OS/CPU. Run manually (workflow_dispatch)
+# to do a dry run: everything is built and uploaded as workflow artifacts, but no
+# release is created.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Never ship a tag that fails the same checks CI runs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: go test (race)
+        run: go test -race -count=1 ./...
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux,   goarch: amd64}
+          - {goos: linux,   goarch: arm64}
+          - {goos: linux,   goarch: arm,   goarm: "7", suffix: armv7}
+          - {goos: linux,   goarch: arm,   goarm: "6", suffix: armv6}
+          - {goos: linux,   goarch: "386"}
+          - {goos: linux,   goarch: riscv64}
+          - {goos: linux,   goarch: ppc64le}
+          - {goos: linux,   goarch: s390x}
+          - {goos: darwin,  goarch: amd64}
+          - {goos: darwin,  goarch: arm64}
+          - {goos: windows, goarch: amd64}
+          - {goos: windows, goarch: arm64}
+          - {goos: windows, goarch: "386"}
+          - {goos: freebsd, goarch: amd64}
+          - {goos: freebsd, goarch: arm64}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build and package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+          ARCH_NAME: ${{ matrix.suffix || matrix.goarch }}
+        run: |
+          set -euo pipefail
+          name="webtraffik_${VERSION}_${GOOS}_${ARCH_NAME}"
+          bin=webtraffik; [ "$GOOS" = windows ] && bin=webtraffik.exe
+          mkdir -p "dist/$name"
+          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o "dist/$name/$bin" ./cmd/webtraffik
+          cp LICENSE README.md SERVICES.md config.yaml.example "dist/$name/"
+          # Deployment helpers target Linux/systemd/nftables only.
+          if [ "$GOOS" = linux ]; then
+            cp install.sh firewall.sh nftables.conf webtraffik.service "dist/$name/"
+          fi
+          cd dist
+          if [ "$GOOS" = windows ]; then
+            zip -qr "$name.zip" "$name"
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+          rm -rf "$name"
+          ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.goos }}-${{ matrix.suffix || matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # create the release
+      id-token: write      # sigstore signing for provenance attestations
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          pattern: bin-*
+          merge-multiple: true
+      - name: source archives and checksums
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+        run: |
+          set -euo pipefail
+          git archive --format=tar.gz --prefix="webtraffik-${VERSION}/" -o "assets/webtraffik_${VERSION}_source.tar.gz" HEAD
+          git archive --format=zip    --prefix="webtraffik-${VERSION}/" -o "assets/webtraffik_${VERSION}_source.zip"    HEAD
+          cd assets
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - name: attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: assets/*
+      - name: upload dry-run artifacts
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: assets/*
+      - name: publish release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" assets/* \
+            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag $prerelease

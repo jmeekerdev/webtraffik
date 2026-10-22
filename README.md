@@ -109,6 +109,35 @@ Check logs with:
 journalctl -u webtraffik -f
 ```
 
+## Releases
+
+Tagged releases (`vX.Y.Z`) are published on the GitHub Releases page by
+`.github/workflows/release.yml`, which re-runs fmt/vet/tests first. Each release has:
+
+- `webtraffik_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows): static binary
+  (`CGO_ENABLED=0`, `-trimpath`), README, LICENSE, `config.yaml.example`; Linux
+  archives also include `install.sh`, `firewall.sh`, `nftables.conf` and the systemd unit.
+- `webtraffik_<version>_source.tar.gz` / `.zip`: the tagged source.
+- `SHA256SUMS`, plus signed build-provenance attestations.
+
+| OS | Architectures |
+|----|---------------|
+| linux | amd64, arm64, armv7, armv6, 386, riscv64, ppc64le, s390x |
+| darwin | amd64, arm64 |
+| windows | amd64, arm64, 386 |
+| freebsd | amd64, arm64 |
+
+Verify a download:
+
+```bash
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify webtraffik_<version>_linux_amd64.tar.gz --repo jmeekerdev/webtraffik
+```
+
+The eBPF/XDP fast path, `firewall.sh` and the systemd unit are Linux-only; other
+platforms run the Go listeners (`-capture-mode=go-only`). Cut a release with
+`git tag v1.2.3 && git push origin v1.2.3`; run the workflow manually for a dry run.
+
 ## Installation Methods
 
 ### Method 1: Local Install (requires Go and make)
