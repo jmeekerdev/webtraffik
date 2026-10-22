@@ -1,6 +1,6 @@
 module webtraffik
 
-go 1.26.1
+go 1.27.3
 
 require (
 	github.com/cilium/ebpf v0.16.0
