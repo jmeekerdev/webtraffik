@@ -17,8 +17,8 @@ jobs:
     # Never ship a tag that fails the same checks CI runs.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - name: gofmt
@@ -51,8 +51,8 @@ jobs:
           - {goos: freebsd, goarch: amd64}
           - {goos: freebsd, goarch: arm64}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - name: build and package
@@ -82,7 +82,7 @@ jobs:
           fi
           rm -rf "$name"
           ls -l
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.goos }}-${{ matrix.suffix || matrix.goarch }}
           path: dist/*
@@ -96,8 +96,8 @@ jobs:
       id-token: write      # sigstore signing for provenance attestations
       attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
         with:
           path: assets
           pattern: bin-*
@@ -113,12 +113,12 @@ jobs:
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
       - name: attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: assets/*
       - name: upload dry-run artifacts
         if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-assets
           path: assets/*
@@ -129,5 +129,11 @@ jobs:
         run: |
           prerelease=""
           case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" assets/* \
-            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag $prerelease
+          # A release may already exist (e.g. created in the web UI when the tag
+          # was made); attach to it instead of failing.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" assets/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" assets/* \
+              --title "$GITHUB_REF_NAME" --generate-notes --verify-tag $prerelease
+          fi
